@@ -39,6 +39,44 @@ for h in range(H):
         row.append(1 if board_txt[h][w] != "#" else 0)
     board.append(row)
 
+# 移動方向の候補
+# 斜めもあるならここに定義
+directions = [((0, -1), (0, 1)), ((-1, 0), (1, 0))]  # ((左右), (上下))
+directions_flatten = [d for dirs in directions for d in dirs]
+
+
+def is_all_connected():
+    """
+    盤面が連結かどうか
+    """
+    visited = [[False] * W for _ in range(H)]
+    stack = []
+    for h in range(H):
+        for w in range(W):
+            if board[h][w]:
+                stack.append((h, w))
+                break
+        if stack:
+            break
+
+    while stack:
+        h, w = stack.pop()
+        for dh, dw in directions_flatten:
+            nh, nw = h + dh, w + dw
+            if 0 <= nh < H and 0 <= nw < W and board[nh][nw] and not visited[nh][nw]:
+                visited[nh][nw] = True
+                stack.append((nh, nw))
+
+    for h in range(H):
+        for w in range(W):
+            if board[h][w] and not visited[h][w]:
+                return False
+    return True
+
+
+if not is_all_connected():
+    raise ValueError("盤面に飛び地があります")
+
 
 # あるマスから、その方向にまっすぐいったときにどこで止まるかを返す
 @lru_cache(maxsize=None)
@@ -54,8 +92,6 @@ def get_end(h, w, direction):
 
 # 直線移動の始点と終点のセットをノードにする
 # あるマスから移動できるノードを列挙する
-directions = [((0, -1), (0, 1)), ((-1, 0), (1, 0))]  # ((左右), (上下))
-directions_flatten = [d for dirs in directions for d in dirs]
 cell_to_nodes: DefaultDict[Tuple[int, int], List[Tuple[Tuple[int, int], Tuple[int, int]]]] = defaultdict(list)
 node_to_cells: DefaultDict[Tuple[Tuple[int, int], Tuple[int, int]], List[Tuple[int, int]]] = defaultdict(list)
 for h in range(H):
@@ -86,10 +122,6 @@ G.add_nodes_from(graph.keys())
 for k, v in graph.items():
     for vv in v:
         G.add_edge(k, vv)
-
-# 連結かどうか
-if not nx.is_weakly_connected(G):
-    raise ValueError("盤面に飛び地があります")
 
 # 強連結成分分解
 scc = list(nx.strongly_connected_components(G))
@@ -162,16 +194,25 @@ def can_reach_to(goal_cells: Set[Tuple[int, int]], start_cell, forbidden_cell):
     return False
 
 
+@lru_cache(maxsize=None)
+def scc_to_cells(scc_v):
+    """
+    強連結成分の番号からその強連結成分に含まれるマスのセットを返す
+    """
+    cells = set()
+    for node in scc[scc_v]:
+        for h, w in node_to_cells[node]:
+            cells.add((h, w))
+    return cells
+
+
 @debug
 def can_absolutely_fill_all_cells_from_cell(start_cell, scc_v):
     """
     指定した開始位置から scc_v の連結成分に向かうパスのすべてで、すべてのマスを埋められるか
     """
     # これらのマスに来ると最後の連結成分に入る
-    last_scc_cells = set()
-    for node in scc[scc_v]:
-        for h, w in node_to_cells[node]:
-            last_scc_cells.add((h, w))
+    last_scc_cells = scc_to_cells(scc_v)
 
     # 埋めないといけないマス
     not_visited_cells = []
@@ -225,13 +266,59 @@ def can_absolutely_solve_from_cell(start_cell):
     return True
 
 
+def scc_dfs(scc_v, visit_counts=None):
+    """
+    強連結成分 scc_v から始めて、すべてのマスを埋められるパスがあるか
+    """
+    if not visit_counts:
+        visit_counts = [[0] * W for _ in range(H)]
+        for h, w in scc_to_cells(scc_v):
+            visit_counts[h][w] += 1
+
+    # 先端までいったら全部埋まってるか判定
+    if not condensed_graph[scc_v]:
+        ok = True
+        for h in range(H):
+            for w in range(W):
+                if board[h][w]:
+                    ok &= visit_counts[h][w] > 0
+        return ok
+    else:
+        # 先があるなら続ける
+        for scc_u in condensed_graph[scc_v]:
+            for h, w in scc_to_cells(scc_u):
+                visit_counts[h][w] += 1
+            ok = scc_dfs(scc_u, visit_counts)
+            for h, w in scc_to_cells(scc_u):
+                visit_counts[h][w] -= 1
+
+            if ok:
+                return True
+    return False
+
+
+@debug
 def can_solve_from_cell(start_cell):
     """
     指定した位置から開始して、解き方があるかどうかを判定する
     True なら解き方がある (詰む可能性もある)
     False なら絶対に解けない
     """
-    # TODO: 実装
+    # 絶対に解けるなら調べる必要ない
+    if can_absolutely_solve_from_cell(start_cell):
+        return True
+
+    seen_scc_v = set()
+    for start_node in cell_to_nodes[start_cell]:
+        scc_v = node_to_scc[start_node]
+        # すでにやったならスキップ
+        if scc_v in seen_scc_v:
+            continue
+        seen_scc_v.add(scc_v)
+
+        # scc_v から始まるパスのいずれかで、すべてのマスを埋められるものがあれば、解ける
+        if scc_dfs(scc_v):
+            return True
     return False
 
 
@@ -239,12 +326,13 @@ def main():
     if start_cell:
         print(f"スタート地点: {start_cell}")
         print(f"絶対に詰まない？: {can_absolutely_solve_from_cell(start_cell)}")
+        print(f"解が存在する？: {can_solve_from_cell(start_cell)}")
     else:
         print("スタート地点: 任意")
         print(f"絶対に詰まない？: {can_absolutely_solve()}")
 
-    # # debug
-    # # 図にする
+    # debug
+    # 図にする
     # nx.draw_networkx(G, pos=nx.spring_layout(G, k=0.7), with_labels=True, arrows=True)
     # plt.show()
     # nx.draw_networkx(condensed_G, pos=nx.spring_layout(condensed_G, k=0.7), with_labels=True, arrows=True)
