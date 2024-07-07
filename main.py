@@ -44,6 +44,9 @@ for h in range(H):
 directions = [((0, -1), (0, 1)), ((-1, 0), (1, 0))]  # ((左右), (上下))
 directions_flatten = [d for dirs in directions for d in dirs]
 
+# 何マス塗ったらクリアか
+clear_draw_count = sum(sum(row) for row in board)
+
 
 def is_all_connected():
     """
@@ -88,6 +91,22 @@ def get_end(h, w, direction):
     if 0 <= h + dh < H and 0 <= w + dw < W and board[h + dh][w + dw]:
         return get_end(h + dh, w + dw, direction)
     return h, w
+
+
+# @debug
+def get_cells_in_direction(h, w, direction):
+    """
+    あるマスから、その方向にまっすぐいったときに通るマスのリストを返す
+    """
+    ret = []
+    dh, dw = direction
+    while 0 <= h < H and 0 <= w < W:
+        if not board[h][w]:
+            break
+        ret.append((h, w))
+        h += dh
+        w += dw
+    return ret
 
 
 # 直線移動の始点と終点のセットをノードにする
@@ -322,11 +341,87 @@ def can_solve_from_cell(start_cell):
     return False
 
 
+def hash_canvas(canvas):
+    return hash(tuple(map(tuple, canvas)))
+
+
+class CanvasState:
+    def __init__(self, canvas):
+        self.canvas = canvas
+        self.hash = hash_canvas(canvas)
+        self.draw_count = sum(sum(row) for row in canvas)
+        self.is_clear = self.draw_count == clear_draw_count
+
+    def __hash__(self):
+        return self.hash
+
+    def __eq__(self, other):
+        return self.hash == other.hash
+
+    def get_canvas_copy(self):
+        return [list(row) for row in self.canvas]
+
+    def evaluate(self):
+        return -self.draw_count
+
+
+hash_to_canvas = dict()
+
+
+def get_canvas_state(canvas):
+    hash = hash_canvas(canvas)
+    if hash not in hash_to_canvas:
+        hash_to_canvas[hash] = CanvasState([list(row) for row in canvas])
+    return hash_to_canvas[hash]
+
+
+# 最短手数を求める
+# TODO: 履歴を返したい
+@debug
+def search_minimum_steps(start_cell, beam_width=1000, max_steps=1000):
+    start_h, start_w = start_cell
+    initial_canvas = [[0] * W for _ in range(H)]
+    initial_canvas[start_h][start_w] = 1
+    # ビームサーチのつもり
+    beam = [(get_canvas_state(initial_canvas), start_cell)]
+    seen = set()
+    steps = 0
+    while beam and steps < max_steps:
+        next_beam = set()
+        for canvas_state, (h, w) in beam:
+            for direction in directions_flatten:
+                draw_cells = get_cells_in_direction(h, w, direction)
+                canvas = canvas_state.get_canvas_copy()
+                for draw_h, draw_w in draw_cells:
+                    canvas[draw_h][draw_w] = 1
+                next_canvas_state = get_canvas_state(canvas)
+                if next_canvas_state.is_clear:
+                    return steps + 1
+                if (next_canvas_state, draw_cells[-1]) not in seen:
+                    next_beam.add((next_canvas_state, draw_cells[-1]))
+        # 全部見た
+        if not next_beam:
+            return -1
+
+        beam = sorted(next_beam, key=lambda x: x[0].evaluate())[:beam_width]
+        seen.update(beam)
+        steps += 1
+
+        # debug
+        progress = beam[0][0].draw_count / clear_draw_count
+        print(
+            f"step: {steps}, progress: {progress:.2f} ({beam[0][0].draw_count}/{clear_draw_count}), seen: {len(seen)}")
+    return -1
+
+
 def main():
     if start_cell:
         print(f"スタート地点: {start_cell}")
         print(f"絶対に詰まない？: {can_absolutely_solve_from_cell(start_cell)}")
-        print(f"解が存在する？: {can_solve_from_cell(start_cell)}")
+        can_solve = can_solve_from_cell(start_cell)
+        print(f"解が存在する？: {can_solve}")
+        if can_solve:
+            print(f"最短手数: {search_minimum_steps(start_cell)}")
     else:
         print("スタート地点: 任意")
         print(f"絶対に詰まない？: {can_absolutely_solve()}")
