@@ -1,6 +1,7 @@
 import sys
 from collections import defaultdict
 from functools import lru_cache
+from typing import DefaultDict, List, Tuple, Set
 
 import matplotlib.pyplot as plt
 import networkx as nx
@@ -22,13 +23,13 @@ for row in board_txt:
     assert all(c in "#.o" for c in row), "# と . と o で構築してください"
 
 # スタート地点が書いてあればそれを探す
-start_position = None
+start_cell = None
 for h in range(H):
     for w in range(W):
         if board_txt[h][w] == 'o':
-            if start_position:
+            if start_cell:
                 raise ValueError("スタート地点が複数あります")
-            start_position = h, w
+            start_cell = h, w
 
 # 通れるなら 1, 通れないなら 0 に変換
 board = []
@@ -54,8 +55,9 @@ def get_end(h, w, direction):
 # 直線移動の始点と終点のセットをノードにする
 # あるマスから移動できるノードを列挙する
 directions = [((0, -1), (0, 1)), ((-1, 0), (1, 0))]  # ((左右), (上下))
-cell_to_nodes = defaultdict(list)
-node_to_cells = defaultdict(list)
+directions_flatten = [d for dirs in directions for d in dirs]
+cell_to_nodes: DefaultDict[Tuple[int, int], List[Tuple[Tuple[int, int], Tuple[int, int]]]] = defaultdict(list)
+node_to_cells: DefaultDict[Tuple[Tuple[int, int], Tuple[int, int]], List[Tuple[int, int]]] = defaultdict(list)
 for h in range(H):
     for w in range(W):
         if not board[h][w]:
@@ -80,9 +82,14 @@ for nodes in cell_to_nodes.values():
             if node != (end1, end2):
                 graph[(end1, end2)].append(node)
 G = nx.DiGraph()
+G.add_nodes_from(graph.keys())
 for k, v in graph.items():
     for vv in v:
         G.add_edge(k, vv)
+
+# 連結かどうか
+if not nx.is_weakly_connected(G):
+    raise ValueError("盤面に飛び地があります")
 
 # 強連結成分分解
 scc = list(nx.strongly_connected_components(G))
@@ -100,13 +107,17 @@ for v, nodes in enumerate(scc):
             if node_to_scc[u] != v:
                 condensed_graph[v].add(node_to_scc[u])
 condensed_G = nx.DiGraph()
+condensed_G.add_nodes_from(range(len(condensed_graph)))
 for v, nodes in enumerate(condensed_graph):
     for u in nodes:
         condensed_G.add_edge(v, u)
 
 
 # @debug
-def can_fill_all_cells(nodes):
+def can_fill_all_cells(nodes: List[Tuple[Tuple[int, int], Tuple[int, int]]]):
+    """
+    指定したノードですべてのマスを埋められるか
+    """
     visited = [[False] * W for _ in range(H)]
     for node in nodes:
         for h, w in node_to_cells[node]:
@@ -119,26 +130,120 @@ def can_fill_all_cells(nodes):
     return ok
 
 
+@debug
+def can_reach_to(goal_cells: Set[Tuple[int, int]], start_cell, forbidden_cell):
+    """
+    指定した開始位置から指定したマスのどれかに forbidden_cell を通らずに到達できるか
+    """
+    if start_cell == forbidden_cell:
+        return False
+    if start_cell in goal_cells:
+        return True
+
+    start_h, start_w = start_cell
+    visited = [[False] * W for _ in range(H)]
+    visited[start_h][start_w] = True
+    stack = [start_cell]
+    while stack:
+        cell = stack.pop()
+        if cell in goal_cells:
+            return True
+
+        for dh, dw in directions_flatten:
+            h, w = cell
+            # まっすぐ行けるとこまで行く
+            while (h, w) != forbidden_cell and 0 <= h + dh < H and 0 <= w + dw < W and board[h + dh][w + dw]:
+                h += dh
+                w += dw
+            # 禁止マスを通らずに止まれたらスタックに積む
+            if (h, w) != forbidden_cell and not visited[h][w]:
+                visited[h][w] = True
+                stack.append((h, w))
+    return False
+
+
+@debug
+def can_absolutely_fill_all_cells_from_cell(start_cell, scc_v):
+    """
+    指定した開始位置から scc_v の連結成分に向かうパスのすべてで、すべてのマスを埋められるか
+    """
+    # これらのマスに来ると最後の連結成分に入る
+    last_scc_cells = set()
+    for node in scc[scc_v]:
+        for h, w in node_to_cells[node]:
+            last_scc_cells.add((h, w))
+
+    # 埋めないといけないマス
+    not_visited_cells = []
+    for h in range(H):
+        for w in range(W):
+            if board[h][w] and (h, w) not in last_scc_cells:
+                not_visited_cells.append((h, w))
+
+    # 埋めないといけないマスを通らずに到達できるパスがあるなら、すべてのマスを埋めることはできない
+    for forbidden_cell in not_visited_cells:
+        if can_reach_to(last_scc_cells, start_cell, forbidden_cell):
+            return False
+    return True
+
+
+@debug
 def can_absolutely_solve():
     """
-    盤面が絶対に詰まないかどうかを判定する
+    盤面のどこからスタートしても絶対に詰まないかどうかを判定する
     True なら絶対に詰まない
-    False なら詰む可能性がある
+    False なら詰む可能性がある (解ける可能性もある)
     """
     # 縮約グラフ上での出次数が 0 の強連結成分に含まれるノードをすべてたどったとき、マスをすべて埋められるなら、その盤面は詰まない
-    ret = True
     for v in range(len(condensed_graph)):
         # 出次数がゼロ
         if not condensed_graph[v]:
             scc_nodes = scc[v]
-            ret &= can_fill_all_cells(scc_nodes)
-    return ret
+            if not can_fill_all_cells(scc_nodes):
+                return False
+    return True
+
+
+@debug
+def can_absolutely_solve_from_cell(start_cell):
+    """
+    指定した位置から開始して、絶対に詰まないかどうかを判定する
+    True なら絶対に詰まない
+    False なら詰む可能性がある (解ける可能性もある)
+    """
+    # どこから開始しても絶対に詰まないなら True でいい
+    if can_absolutely_solve():
+        return True
+
+    # 縮約グラフ上での出次数が 0 の強連結成分のいずれかについて、
+    # スタート地点からそこに向かうパスのうち盤面を埋められないものがあれば、詰む可能性がある
+    for v in range(len(condensed_graph)):
+        # 出次数がゼロ
+        if not condensed_graph[v]:
+            if not can_absolutely_fill_all_cells_from_cell(start_cell, v):
+                return False
+    return True
+
+
+def can_solve_from_cell(start_cell):
+    """
+    指定した位置から開始して、解き方があるかどうかを判定する
+    True なら解き方がある (詰む可能性もある)
+    False なら絶対に解けない
+    """
+    # TODO: 実装
+    return False
 
 
 def main():
-    print(f"絶対に詰まない: {can_absolutely_solve()}")
+    if start_cell:
+        print(f"スタート地点: {start_cell}")
+        print(f"絶対に詰まない？: {can_absolutely_solve_from_cell(start_cell)}")
+    else:
+        print("スタート地点: 任意")
+        print(f"絶対に詰まない？: {can_absolutely_solve()}")
 
-    # debug
+    # # debug
     # # 図にする
     # nx.draw_networkx(G, pos=nx.spring_layout(G, k=0.7), with_labels=True, arrows=True)
     # plt.show()
