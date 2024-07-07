@@ -1,30 +1,17 @@
-import bisect
-import cmath
-import heapq
-import itertools
-import math
-import operator
-import os
-import random
-import re
-import string
 import sys
-from collections import Counter, defaultdict, deque
-from copy import deepcopy
-from decimal import Decimal
-from functools import lru_cache, reduce
-from math import gcd
-from operator import add, itemgetter, mul, xor
+from collections import defaultdict
+from functools import lru_cache
 
-import numpy as np
-import networkx as nx
 import matplotlib.pyplot as plt
+import networkx as nx
+
+from debug import debug
 
 sys.setrecursionlimit(10 ** 9)
 
 # _in.txt から盤面を構築
 board_txt = open("_in.txt", "r").read().strip().split("\n")
-# 空行で終わる
+# 空行以降は読み込まない
 if "" in board_txt:
     board_txt = board_txt[:board_txt.index("")]
 
@@ -42,19 +29,10 @@ for h in range(H):
         row.append(1 if board_txt[h][w] == "." else 0)
     board.append(row)
 
-# カドを適当にスタート地点にする
-start_h, start_w = -1, -1
-for h in range(H):
-    for w in range(W):
-        if board[h][w]:
-            start_h, start_w = h, w
-            break
-    if start_h >= 0:
-        break
-
 
 # あるマスから、その方向にまっすぐいったときにどこで止まるかを返す
 @lru_cache(maxsize=None)
+# @debug
 def get_end(h, w, direction):
     if not board[h][w]:
         return h, w
@@ -67,16 +45,19 @@ def get_end(h, w, direction):
 # 直線移動の始点と終点のセットをノードにする
 # あるマスから移動できるノードを列挙する
 directions = [((0, -1), (0, 1)), ((-1, 0), (1, 0))]  # ((左右), (上下))
-cell_to_nodes = dict()
+cell_to_nodes = defaultdict(list)
+node_to_cells = defaultdict(list)
 for h in range(H):
     for w in range(W):
         if not board[h][w]:
             continue
-        cell_to_nodes[(h, w)] = []
+        cell = h, w
         for dir1, dir2 in directions:
-            cell_to_nodes[(h, w)].append((get_end(h, w, dir1), get_end(h, w, dir2)))
+            node = get_end(h, w, dir1), get_end(h, w, dir2)
+            cell_to_nodes[cell].append(node)
+            node_to_cells[node].append(cell)
 
-# グラフにする
+# ある直線から遷移できる直線を結ぶグラフを作る
 graph = dict()
 for nodes in cell_to_nodes.values():
     for end1, end2 in nodes:
@@ -89,11 +70,77 @@ for nodes in cell_to_nodes.values():
         for node in cell_to_nodes[end2]:
             if node != (end1, end2):
                 graph[(end1, end2)].append(node)
-
-# 図にする
 G = nx.DiGraph()
 for k, v in graph.items():
     for vv in v:
         G.add_edge(k, vv)
-nx.draw_networkx(G, pos=nx.spring_layout(G, k=0.7), with_labels=True, arrows=True)
-plt.show()
+
+# 強連結成分分解
+scc = list(nx.strongly_connected_components(G))
+# ノードから属している強連結成分を取得するマップ
+node_to_scc = dict()
+for i, nodes in enumerate(scc):
+    for node in nodes:
+        node_to_scc[node] = i
+
+# 縮約グラフ
+condensed_graph = [set() for _ in range(len(scc))]
+for v, nodes in enumerate(scc):
+    for node in nodes:
+        for u in G[node]:
+            if node_to_scc[u] != v:
+                condensed_graph[v].add(node_to_scc[u])
+condensed_G = nx.DiGraph()
+for v, nodes in enumerate(condensed_graph):
+    for u in nodes:
+        condensed_G.add_edge(v, u)
+
+
+# @debug
+def can_fill_all_cells(nodes):
+    visited = [[False] * W for _ in range(H)]
+    for node in nodes:
+        for h, w in node_to_cells[node]:
+            visited[h][w] = True
+    ok = True
+    for h in range(H):
+        for w in range(W):
+            if board[h][w]:
+                ok &= visited[h][w]
+    return ok
+
+
+def can_absolutely_solve():
+    """
+    盤面が絶対に詰まないかどうかを判定する
+    True なら絶対に詰まない
+    False なら詰む可能性がある
+    """
+    # 縮約グラフ上での出次数が 0 の強連結成分に含まれるノードをすべてたどったとき、マスをすべて埋められるなら、その盤面は詰まない
+    ret = True
+    for v in range(len(condensed_graph)):
+        # 出次数がゼロ
+        if not condensed_graph[v]:
+            scc_nodes = scc[v]
+            ret &= can_fill_all_cells(scc_nodes)
+    return ret
+
+
+def main():
+    print(f"絶対に詰まない: {can_absolutely_solve()}")
+
+    # debug
+    # # 図にする
+    # nx.draw_networkx(G, pos=nx.spring_layout(G, k=0.7), with_labels=True, arrows=True)
+    # plt.show()
+    # nx.draw_networkx(condensed_G, pos=nx.spring_layout(condensed_G, k=0.7), with_labels=True, arrows=True)
+    # plt.show()
+    # for v, nodes in enumerate(scc):
+    #     print(f"強連結成分 {v}: {nodes}")
+    #     for node in nodes:
+    #         print(f"  {node} -> {node_to_cells[node]}")
+    #     print()
+
+
+if __name__ == "__main__":
+    main()
