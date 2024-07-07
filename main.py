@@ -1,3 +1,4 @@
+import heapq
 import sys
 from collections import defaultdict
 from functools import lru_cache
@@ -358,11 +359,11 @@ class CanvasState:
     def __eq__(self, other):
         return self.hash == other.hash
 
+    def __lt__(self, other):
+        return self.draw_count < other.draw_count
+
     def get_canvas_copy(self):
         return [list(row) for row in self.canvas]
-
-    def evaluate(self):
-        return -self.draw_count
 
 
 hash_to_canvas = dict()
@@ -415,7 +416,8 @@ def minimum_steps__beam_search(start_cell, beam_width=1000, max_steps=1000):
         if not next_beam:
             return -1, []
 
-        beam = sorted(next_beam, key=lambda x: x[0].evaluate())[:beam_width]
+        # 進捗がいいものを beam_width だけ残す
+        beam = sorted(next_beam, key=lambda x: -x[0].draw_count)[:beam_width]
         seen.update(beam)
         steps += 1
 
@@ -423,6 +425,118 @@ def minimum_steps__beam_search(start_cell, beam_width=1000, max_steps=1000):
         progress = beam[0][0].draw_count / clear_draw_count
         print(
             f"step: {steps}, progress: {progress:.2f} ({beam[0][0].draw_count}/{clear_draw_count}), seen: {len(seen)}")
+    return -1, []
+
+
+# 最短手数を求める
+@debug
+def minimum_steps__a_star(start_cell, max_iter=100000):
+    start_h, start_w = start_cell
+    initial_canvas = [[0] * W for _ in range(H)]
+    initial_canvas[start_h][start_w] = 1
+    initial_key = get_canvas_state(initial_canvas), start_cell
+    # 評価関数
+    # draw_count はおおきいほどよい、step は小さいほどよい
+    evaluate = lambda draw_count, step: -draw_count + step
+
+    heap = [(evaluate(1, 0), 0, initial_key)]
+    seen = {initial_key: 0}
+    prev = {initial_key: None}
+
+    def restore_hist(key):
+        hist = []
+        while key:
+            _, cell = key
+            hist.append(cell)
+            key = prev[key]
+        return hist[::-1]
+
+    optimal = (float('inf'), -1, [])
+    idx = 0
+    while heap and idx < max_iter:
+        _, step, (canvas_state, (h, w)) = heapq.heappop(heap)
+        for direction in directions_flatten:
+            draw_cells = get_cells_in_direction(h, w, direction)
+            canvas = canvas_state.get_canvas_copy()
+            for draw_h, draw_w in draw_cells:
+                canvas[draw_h][draw_w] = 1
+            next_canvas_state = get_canvas_state(canvas)
+            key = (next_canvas_state, draw_cells[-1])
+            if next_canvas_state.is_clear:
+                val = evaluate(next_canvas_state.draw_count, step + 1)
+                optimal_val, *_ = optimal
+                if val < optimal_val:
+                    optimal = val, step + 1, key
+            if key not in seen or seen[key] > step + 1:
+                heapq.heappush(heap, (evaluate(next_canvas_state.draw_count, step + 1), step + 1, key))
+                seen[key] = step + 1
+                prev[key] = canvas_state, (h, w)
+
+        idx += 1
+
+        # debug
+        if idx % 10000 == 0:
+            print(
+                f"idx: {idx}, seen: {len(seen)}, heap: {len(heap)}, optimal: {optimal[0]}, step: {optimal[1]}")
+
+    if optimal[1] != -1:
+        return optimal[1], restore_hist(optimal[2])
+    return -1, []
+
+
+# 最短手数を求める
+# @debug
+def minimum_steps__chokudai_search(start_cell, max_beam_width=1000, max_steps=100):
+    start_h, start_w = start_cell
+    initial_canvas = [[0] * W for _ in range(H)]
+    initial_canvas[start_h][start_w] = 1
+    initial_key = get_canvas_state(initial_canvas), start_cell
+    # 評価関数
+    # draw_count はおおきいほどよい、step は小さいほどよい
+    evaluate = lambda draw_count, step: -draw_count + step
+
+    optimal = (float('inf'), -1, [])
+    prev = {initial_key: None}
+
+    def restore_hist(key):
+        hist = []
+        while key:
+            _, cell = key
+            hist.append(cell)
+            key = prev[key]
+        return hist[::-1]
+
+    step_heaps = [[] for _ in range(max_steps)]
+    step_heaps[0].append((evaluate(1, 0), 0, initial_key))
+    for beam_width in range(1, max_beam_width + 1):
+        for step in range(max_steps - 1):
+            if not step_heaps[step]:
+                continue
+            _, _, (canvas_state, (h, w)) = heapq.heappop(step_heaps[step])
+            for direction in directions_flatten:
+                draw_cells = get_cells_in_direction(h, w, direction)
+                canvas = canvas_state.get_canvas_copy()
+                for draw_h, draw_w in draw_cells:
+                    canvas[draw_h][draw_w] = 1
+                next_canvas_state = get_canvas_state(canvas)
+                key = (next_canvas_state, draw_cells[-1])
+                if next_canvas_state.is_clear:
+                    val = evaluate(next_canvas_state.draw_count, step + 1)
+                    optimal_val, *_ = optimal
+                    if val < optimal_val:
+                        optimal = val, step + 1, key
+                else:
+                    # FIXME: 入れ過ぎたら削除していかないといけない気がする
+                    heapq.heappush(step_heaps[step + 1],
+                                   (evaluate(next_canvas_state.draw_count, step + 1), step + 1, key))
+                    prev[key] = canvas_state, (h, w)
+
+        # debug
+        if beam_width % 100 == 0:
+            print(f"beam_width: {beam_width}, optimal: {optimal}")
+
+    if optimal[1] != -1:
+        return optimal[1], restore_hist(optimal[2])
     return -1, []
 
 
@@ -434,7 +548,11 @@ def main():
         print(f"解が存在する？: {can_solve}")
         if can_solve:
             steps, hist = minimum_steps__beam_search(start_cell)
-            print(f"最短手数: {steps}, {hist}")
+            print(f"最短手数 (BeamSearch): {steps}, 行動ログ: {hist}")
+            # steps, hist = minimum_steps__a_star(start_cell)
+            # print(f"最短手数 (A*): {steps}, {hist}")
+            # steps, hist = minimum_steps__chokudai_search(start_cell)
+            # print(f"最短手数 (ChokudaiSearch): {steps}, {hist}")
     else:
         print("スタート地点: 任意")
         print(f"絶対に詰まない？: {can_absolutely_solve()}")
