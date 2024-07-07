@@ -19,14 +19,23 @@ H = len(board_txt)
 W = len(board_txt[0])
 for row in board_txt:
     assert len(row) == W, f"横を揃えてください: {row}"
-    assert all(c in "#." for c in row), "# と . で構築してください"
+    assert all(c in "#.o" for c in row), "# と . と o で構築してください"
+
+# スタート地点が書いてあればそれを探す
+start_position = None
+for h in range(H):
+    for w in range(W):
+        if board_txt[h][w] == 'o':
+            if start_position:
+                raise ValueError("スタート地点が複数あります")
+            start_position = h, w
 
 # 通れるなら 1, 通れないなら 0 に変換
 board = []
 for h in range(H):
     row = []
     for w in range(W):
-        row.append(1 if board_txt[h][w] == "." else 0)
+        row.append(1 if board_txt[h][w] != "#" else 0)
     board.append(row)
 
 
