@@ -376,15 +376,25 @@ def get_canvas_state(canvas):
 
 
 # 最短手数を求める
-# TODO: 履歴を返したい
 @debug
-def search_minimum_steps(start_cell, beam_width=1000, max_steps=1000):
+def minimum_steps__beam_search(start_cell, beam_width=1000, max_steps=1000):
     start_h, start_w = start_cell
     initial_canvas = [[0] * W for _ in range(H)]
     initial_canvas[start_h][start_w] = 1
     # ビームサーチのつもり
-    beam = [(get_canvas_state(initial_canvas), start_cell)]
-    seen = set()
+    initial_key = get_canvas_state(initial_canvas), start_cell
+    beam = [initial_key]
+    seen = {initial_key}
+    prev = {initial_key: None}
+
+    def restore_hist(key):
+        hist = []
+        while key:
+            _, cell = key
+            hist.append(cell)
+            key = prev[key]
+        return hist[::-1]
+
     steps = 0
     while beam and steps < max_steps:
         next_beam = set()
@@ -396,12 +406,14 @@ def search_minimum_steps(start_cell, beam_width=1000, max_steps=1000):
                     canvas[draw_h][draw_w] = 1
                 next_canvas_state = get_canvas_state(canvas)
                 if next_canvas_state.is_clear:
-                    return steps + 1
-                if (next_canvas_state, draw_cells[-1]) not in seen:
-                    next_beam.add((next_canvas_state, draw_cells[-1]))
+                    return steps + 1, restore_hist((canvas_state, (h, w))) + [draw_cells[-1]]
+                key = (next_canvas_state, draw_cells[-1])
+                if key not in seen:
+                    next_beam.add(key)
+                    prev[key] = canvas_state, (h, w)
         # 全部見た
         if not next_beam:
-            return -1
+            return -1, []
 
         beam = sorted(next_beam, key=lambda x: x[0].evaluate())[:beam_width]
         seen.update(beam)
@@ -411,7 +423,7 @@ def search_minimum_steps(start_cell, beam_width=1000, max_steps=1000):
         progress = beam[0][0].draw_count / clear_draw_count
         print(
             f"step: {steps}, progress: {progress:.2f} ({beam[0][0].draw_count}/{clear_draw_count}), seen: {len(seen)}")
-    return -1
+    return -1, []
 
 
 def main():
@@ -421,7 +433,8 @@ def main():
         can_solve = can_solve_from_cell(start_cell)
         print(f"解が存在する？: {can_solve}")
         if can_solve:
-            print(f"最短手数: {search_minimum_steps(start_cell)}")
+            steps, hist = minimum_steps__beam_search(start_cell)
+            print(f"最短手数: {steps}, {hist}")
     else:
         print("スタート地点: 任意")
         print(f"絶対に詰まない？: {can_absolutely_solve()}")
