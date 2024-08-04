@@ -24,16 +24,15 @@ st.write("盤面を指定してください")
 with st.expander("サンプル"):
     st.subheader('解けるパターン')
     st.code('''
-...##
+o..##
 ##.#.
 .#.#.
-..o..
-####.
+.....
     ''', language="text")
     # st.write('全体が 1 つの SCC のパターン (詰まない)')
     st.code('''
-o............
-...........#.
+.............
+o..........#.
 ##########.#.
 #########..#.
 ........#..#.
@@ -41,7 +40,7 @@ o............
 ..#.#####.##.
 ..#..........
 ..#####......
-#######.#.#.#
+#.#####.#.#.#
 ....###.#.#.#
 ..#.###.#.#.#
 ..#.....#...#
@@ -183,11 +182,14 @@ if not start_cell:
 elif not can_solve:
     error_container.error('解が存在しません')
 
+directions = np.sign(np.array(list(hist[1:])) - np.array(list(hist[:-1])))
+operations = list(map(lambda d: '↑' if d[0] == -1 else '↓' if d[0] == 1 else '→' if d[1] == 1 else '←', directions))
 table_container.table({
     "解ける？": 'Yes' if can_solve else 'No',
     "詰む可能性がある？": 'No' if can_absolutely_solve else 'Yes',
     "最短手数": min_steps,
     "最短行動ログ": str(hist),
+    "最短操作ログ": ''.join(operations)
 })
 
 
@@ -201,6 +203,8 @@ if can_solve and play_button:
         prev = hist[step - 1]
         current = hist[step]
 
+        step_count_container.write(f"{operations[step - 1]} {step}/{len(hist) - 1}")
+
         # 4 方向前提になってる
         dh, dw = np.sign(np.array(list(current)) - np.array(list(prev)))
         h, w = prev
@@ -213,7 +217,6 @@ if can_solve and play_button:
         colors[*current] = COLOR_RED
 
         plot_state(colors, *current)
-        step_count_container.write(f"Step: {step}/{len(hist) - 1}")
         time.sleep(3 / speed)
 
     st.balloons()
