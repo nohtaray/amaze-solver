@@ -1,3 +1,4 @@
+import os
 import time
 from typing import List
 
@@ -16,18 +17,25 @@ COLOR_WHITE = 0
 COLOR_RED = 1
 COLOR_BLACK = 2
 
-# スライダーで円の移動速度を調整
-speed = st.sidebar.slider("Speed", 1, 60, 60)
-
 st.header("AMAZE Solver")
 st.write("盤面を指定してください")
 with st.expander("サンプル"):
     st.subheader('解けるパターン')
     st.code('''
-o..##
-##.#.
-.#.#.
+#....
 .....
+..o..
+.....
+....#
+    ''', language="text")
+    st.code('''
+o.#...#
+.......
+.......
+.....#.
+.#.....
+.......
+......#
     ''', language="text")
     # st.write('全体が 1 つの SCC のパターン (詰まない)')
     st.code('''
@@ -87,11 +95,11 @@ o..##
     ''', language="text")
 
 sample_stage = """
-...##
-##.#.
-.#.#.
+#....
+.....
 ..o..
-####.
+.....
+....#
 """.strip()
 st.text_area('"#":壁, ".":地面, "o":開始位置', sample_stage, height=200, key="board_txt")
 
@@ -114,6 +122,17 @@ play_button = st.button("再生")
 # エラー表示場所
 error_container = st.empty()
 table_container = st.empty()
+
+# スライダーで円の移動速度を調整
+speed = st.sidebar.slider("Speed", 1, 60, 60)
+# ビーム幅
+beam_widths = [1000, 3000, 10000, 30000, 100000]
+beam_width = st.sidebar.selectbox("Beam Width", beam_widths, index=len(beam_widths) - 1)
+
+# 再生中に途中の動きを見せるか
+animation_enabled = False
+if os.getenv("LOCAL"):
+    animation_enabled = st.sidebar.checkbox("Animate", value=True)
 
 
 def plot_state(colors, h, w):
@@ -159,20 +178,23 @@ plot_state(colors, *start_cell)
 
 # キャッシュ
 @st.cache_data(max_entries=1)
-def solve(board_txt):
+def solve(board_txt, beam_width):
     progress = st.progress(0.0)
 
     def update_progress(step, rate):
         progress.progress(rate)
 
     ret = solver.solve(
-        board_txt, beam_search_beam_width=10000, beam_search_max_steps=1000, beam_search_step_callback=update_progress)
+        board_txt,
+        beam_search_beam_width=beam_width,
+        beam_search_max_steps=1000,
+        beam_search_step_callback=update_progress)
     progress.progress(1.0)
     progress.empty()
     return ret
 
 
-start_cell, can_absolutely_solve, can_solve, solve_result = solve(board_txt)
+start_cell, can_absolutely_solve, can_solve, solve_result = solve(board_txt, beam_width)
 
 min_steps = solve_result[0] if solve_result else -1
 hist = solve_result[1] if solve_result else []
@@ -188,7 +210,6 @@ table_container.table({
     "解ける？": 'Yes' if can_solve else 'No',
     "詰む可能性がある？": 'No' if can_absolutely_solve else 'Yes',
     "最短手数": min_steps,
-    "最短行動ログ": str(hist),
     "最短操作ログ": ''.join(operations)
 })
 
@@ -197,8 +218,8 @@ def is_valid(h, w):
     return 0 <= h < H and 0 <= w < W
 
 
+step_count_container.write(f"{0}/{len(hist) - 1}")
 if can_solve and play_button:
-    step_count_container.write(f"Step: {0}/{len(hist) - 1}")
     for step in range(1, len(hist)):
         prev = hist[step - 1]
         current = hist[step]
@@ -210,8 +231,9 @@ if can_solve and play_button:
         h, w = prev
         while (h, w) != current:
             colors[h, w] = COLOR_RED
-            plot_state(colors, h, w)
-            time.sleep(1 / speed)
+            if animation_enabled:
+                plot_state(colors, h, w)
+                time.sleep(1 / speed)
             h += dh
             w += dw
         colors[*current] = COLOR_RED

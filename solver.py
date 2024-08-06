@@ -1,4 +1,5 @@
 import heapq
+import os
 import sys
 from collections import defaultdict
 from functools import lru_cache
@@ -13,7 +14,8 @@ from debug import debug
 def solve(board_txt: List[str],
           beam_search_beam_width=1000,
           beam_search_max_steps=1000,
-          beam_search_step_callback=None):
+          beam_search_step_callback=None,
+          with_solve_result=True):
     sys.setrecursionlimit(10 ** 9)
 
     H = len(board_txt)
@@ -359,8 +361,9 @@ def solve(board_txt: List[str],
 
             # debug
             progress = beam[0][0].draw_count / clear_draw_count
-            print(
-                f"step: {steps}, progress: {progress:.2f} ({beam[0][0].draw_count}/{clear_draw_count}), seen: {len(seen)}")
+            if os.getenv("DEBUG"):
+                print(
+                    f"step: {steps}, progress: {progress:.2f} ({beam[0][0].draw_count}/{clear_draw_count}), seen: {len(seen)}")
             if step_callback:
                 step_callback(steps, progress)
         return -1, []
@@ -481,7 +484,7 @@ def solve(board_txt: List[str],
         if start_cell:
             ret["can_absolutely_solve"] = can_absolutely_solve_from_cell(start_cell)
             ret["can_solve"] = can_solve_from_cell(start_cell)
-            if ret["can_solve"]:
+            if with_solve_result and ret["can_solve"]:
                 steps, hist = minimum_steps__beam_search(
                     start_cell,
                     beam_width=beam_search_beam_width,

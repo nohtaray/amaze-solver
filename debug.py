@@ -11,6 +11,9 @@ import networkx as nx
 
 
 def debug(fn):
+    if not os.getenv("DEBUG"):
+        return fn
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         start_time = time.perf_counter()
